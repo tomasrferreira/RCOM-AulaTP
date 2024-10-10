@@ -97,11 +97,11 @@ int main(int argc, char *argv[])
         int bytes = read(fd, buf, BUF_SIZE);
         buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
 
-        printf("0x%x\n", buf[0], bytes);
-        printf("0x%x\n", buf[1], bytes);
-        printf("0x%x\n", buf[2], bytes);
-        printf("0x%x\n", buf[3], bytes);
-        printf("0x%x\n", buf[4], bytes);
+        printf("0x%x:%d\n", buf[0], bytes);
+        printf("0x%x:%d\n", buf[1], bytes);
+        printf("0x%x:%d\n", buf[2], bytes);
+        printf("0x%x:%d\n", buf[3], bytes);
+        printf("0x%x:%d\n", buf[4], bytes);
         if (buf[0] == '\0')
             STOP = TRUE;
     }

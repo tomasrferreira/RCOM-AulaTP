@@ -1,0 +1,3 @@
+sudo ./cable
+gcc write_noncanonical.c -Wall -o transmitter.o
+gcc read_noncanonical.c -Wall -o receiver.o

@@ -19,7 +19,7 @@
 #define FALSE 0
 #define TRUE 1
 
-#define BUF_SIZE 256
+#define BUF_SIZE 5
 
 volatile int STOP = FALSE;
 
@@ -90,20 +90,44 @@ int main(int argc, char *argv[])
 
     // Loop for input
     unsigned char buf[BUF_SIZE + 1] = {0}; // +1: Save space for the final '\0' char
+    unsigned char buf2[BUF_SIZE] = {0};
+
+    buf2[0] = 0x7e;
+    buf2[1] = 0x03;
+    buf2[2] = 0x07;
+    buf2[3] = buf2[1] ^ buf2[2];
+    buf2[4] = 0x7e;
+
+    int bytes = read(fd, buf, BUF_SIZE);
+    buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
+    printf("0x%x%x%x%x%x\n", buf[0], buf[1], buf[2], buf[3], buf[4]);
+    int i = 0;
 
     while (STOP == FALSE)
     {
-        // Returns after 5 chars have been input
-        int bytes = read(fd, buf, BUF_SIZE);
-        buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
-
-        printf("0x%x:%d\n", buf[0], bytes);
-        printf("0x%x:%d\n", buf[1], bytes);
-        printf("0x%x:%d\n", buf[2], bytes);
-        printf("0x%x:%d\n", buf[3], bytes);
-        printf("0x%x:%d\n", buf[4], bytes);
-        if (buf[0] == '\0')
-            STOP = TRUE;
+        if (buf[i] == 0x7e){
+            if (i == 4) {
+            printf("0x%x%x%x%x%x\n", buf[0], buf[1], buf[2], buf[3], buf[4]);
+            write(fd, buf2, BUF_SIZE);
+            continue;
+            }
+            else {
+            i = 1;
+            continue;
+            }
+        }
+        else if (buf[i] == 0x03 && (i == 1 || i == 2)) {
+          i++;
+          continue;
+        }
+        else if (buf[i] == 0x0 && i == 3){
+          i = 4;
+          continue;
+        }
+        else {
+          i = 0;
+          continue;
+        }
     }
 
     // The while() cycle should be changed in order to respect the specifications

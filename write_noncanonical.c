@@ -127,7 +127,6 @@ int main(int argc, char *argv[])
     		printf("SET signal sent, %d bytes\n", bytes);
             alarmEnabled = TRUE;
         }
-        while (alarmEnabled) {pause();}
 		read(fd, buf2, BUF_SIZE);
         if (buf2[0] != 0x7e || buf2[1] != 0x03 || buf2[2] != 0x07
             || buf2[3] != (buf2[1] ^ buf2[2]) || buf2[4] != 0x7e)
@@ -139,7 +138,8 @@ int main(int argc, char *argv[])
           printf("Max alarms reached\n");
         }
         else {
-        	printf("UA received, sending another signal\n");
+        	printf("UA received\n");
+            break;
         }
     }
 

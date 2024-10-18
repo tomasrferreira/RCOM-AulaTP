@@ -2,24 +2,146 @@
 
 #include "link_layer.h"
 #include "serial_port.h"
+#include <unistd.h>
+#include <stdio.h>
+#include <signal.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
+#define BUF_SIZE 5
 
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
-int llopen(LinkLayer connectionParameters)
+
+int alarmEnabled = FALSE;
+int alarmCount = 0;
+volatile int stop = FALSE;
+
+void alarmHandler(int signal)
 {
-    if (openSerialPort(connectionParameters.serialPort,
-                       connectionParameters.baudRate) < 0)
-    {
+    alarmEnabled = FALSE;
+    alarmCount++;
+
+    printf("Alarm #%d\n", alarmCount);
+}
+
+int llopen(LinkLayer connectionParameters){
+    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    if (fd < 0){
         return -1;
     }
 
-    // TODO
+    int alarmCount = 0;
+    int retransmissions = connectionParameters.nRetransmissions;
+    volatile int stop = FALSE;
+    int state = 0;
+    unsigned char buf = 0;
 
-    return 1;
+    if (connectionParameters.role == LlTx){
+        (void)signal(SIGALRM, alarmHandler);
+
+        while (alarmCount < retransmissions){
+            if (alarmEnabled == FALSE){
+                unsigned char SET[5] = {0x7E,0x03,0x03,0x0,0x7E};
+                printf("SET sent.\n");
+                writeBytesSerialPort(SET, 5);
+                alarm(connectionParameters.timeout);
+                alarmEnabled = TRUE;
+            }
+            while (alarmEnabled == TRUE) {
+                if (alarmEnabled == TRUE) {break;}
+                readByteSerialPort(&buf);
+                if (buf > 0){
+                    switch (buf){
+                        case 0x7E:
+                            if (state == 4) {
+                                printf("UA received.\n");
+                                alarm(0);
+                                return fd;
+                            }
+                            else{
+                                state = 1;
+                                continue;
+                            }
+
+                        case 0x03:
+                            if (state == 1) {
+                                state = 2;
+                                continue;
+                            }
+                            else {
+                                state = 0;
+                                continue;
+                            }
+                        case 0x04:
+                            if (state == 3){
+                                state = 4;
+                                continue;
+                            }
+                            else {
+                                state = 0;
+                                continue;
+                            }
+                        case 0x07:
+                            if (state == 2){
+                                state = 3;
+                                continue;
+                            }
+                            else {
+                                state = 0;
+                                continue;
+                            }
+                        default:
+                            state = 0;
+                            continue;
+                    }
+                }
+            }
+        }
+        alarm(0);
+        return -1;
+    }
+    else if (connectionParameters.role == LlRx){
+        state = 0;
+        unsigned char UA[5] = {0x7E,0x00,0x07,0x04,0x7E};
+        stop = FALSE;
+        while (stop == FALSE){
+            int bytes = readByteSerialPort(&buf);
+            if (bytes > 0){
+                switch (buf){
+                    case 0x7E:
+                        if (state == 4) {
+                          printf("SET received.\n");
+                          printf("UA Sent : 0x%x%x%x%x%x\n",UA[0],UA[1],UA[2],UA[3],UA[4]);
+                          writeBytesSerialPort(UA, 5);
+                          continue;
+                        }
+                        state = 1;
+                        continue;
+                    case 0x03:
+                        if (state == 1 || state == 2) {
+                            state++;
+                            continue;
+                        }
+                        state = 0;
+                        continue;
+                    case 0x0:
+                        if (state == 3){
+                            state = 4;
+                            continue;
+                        }
+                        state = 0;
+                        continue;
+                    default:
+                      state = 0;
+                      continue;
+                }
+            }
+        }
+        return 0;
+    }
+    return -1;
 }
 
 ////////////////////////////////////////////////

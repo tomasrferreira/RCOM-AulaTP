@@ -97,37 +97,35 @@ int main(int argc, char *argv[])
     buf2[2] = 0x07;
     buf2[3] = buf2[1] ^ buf2[2];
     buf2[4] = 0x7e;
-
-    int bytes = read(fd, buf, BUF_SIZE);
-    buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
-    printf("0x%x%x%x%x%x\n", buf[0], buf[1], buf[2], buf[3], buf[4]);
-    int i = 0;
-
-    while (STOP == FALSE)
-    {
-        if (buf[i] == 0x7e){
-            if (i == 4) {
-            printf("0x%x%x%x%x%x\n", buf[0], buf[1], buf[2], buf[3], buf[4]);
-            write(fd, buf2, BUF_SIZE);
-            continue;
-            }
-            else {
-            i = 1;
-            continue;
-            }
-        }
-        else if (buf[i] == 0x03 && (i == 1 || i == 2)) {
-          i++;
-          continue;
-        }
-        else if (buf[i] == 0x0 && i == 3){
-          i = 4;
-          continue;
-        }
-        else {
-          i = 0;
-          continue;
-        }
+	while (STOP == FALSE){
+    	int i = 0;
+    	do
+    	{
+        	read(fd, &buf[i], 1);
+        	if (buf[i] == 0x7e){
+            	if (i == 4) {
+                  	printf("SET Signal received, UA sent back.\n");
+            		write(fd, buf2, BUF_SIZE);
+            		break;
+            	}
+            	else {
+            		i = 1;
+            		continue;
+            	}
+        	}
+        	else if (buf[i] == 0x03 && (i == 1 || i == 2)) {
+          		i++;
+          		continue;
+        	}
+        	else if (buf[i] == 0x0 && i == 3){
+          		i = 4;
+          		continue;
+        	}
+        	else {
+          		i = 0;
+          		continue;
+        	}
+    	} while (1);
     }
 
     // The while() cycle should be changed in order to respect the specifications

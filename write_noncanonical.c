@@ -118,13 +118,13 @@ int main(int argc, char *argv[])
 
 	(void)signal(SIGALRM, alarmHandler);
 
-    while (alarmCount < 4)
+    while (alarmCount < 3)
     {
         if (alarmEnabled == FALSE)
         {
             alarm(3);
             int bytes = write(fd, buf, 5);
-    		printf("%d bytes written\n", bytes);
+    		printf("SET signal sent, %d bytes\n", bytes);
             alarmEnabled = TRUE;
         }
         while (alarmEnabled) {pause();}
@@ -132,13 +132,20 @@ int main(int argc, char *argv[])
         if (buf2[0] != 0x7e || buf2[1] != 0x03 || buf2[2] != 0x07
             || buf2[3] != (buf2[1] ^ buf2[2]) || buf2[4] != 0x7e)
         {
+          printf("Incorrect data received\n");
           break;
+        }
+        if (alarmCount == 3){
+          printf("Max alarms reached\n");
+        }
+        else {
+        	printf("UA received, sending another signal\n");
         }
     }
 
     // Wait until all bytes have been written to the serial port
+
     alarm(0);
-    alarmEnabled = FALSE;
     sleep(1);
 
     // Restore the old port settings

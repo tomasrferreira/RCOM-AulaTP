@@ -19,5 +19,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     ll.nRetransmissions = nTries;
     ll.timeout = timeout;
     llopen(ll);
+    llwrite(buf, bufSize);
     return;
 }

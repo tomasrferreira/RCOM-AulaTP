@@ -104,7 +104,7 @@ int llopen(LinkLayer connectionParameters){
     }
     else if (connectionParameters.role == LlRx){
         state = 0;
-        unsigned char UA[5] = {0x7E,0x00,0x07,0x04,0x7E};
+        unsigned char UA[5] = {0x7E,0x03,0x07,0x04,0x7E};
         stop = FALSE;
         while (stop == FALSE){
             int bytes = readByteSerialPort(&buf);
@@ -149,9 +149,39 @@ int llopen(LinkLayer connectionParameters){
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    // TODO
+    unsigned char FLAG = 0x7E;
+    unsigned char controlField = 0x03;  
+    unsigned char addressField = 0x01;  
+    unsigned char frame[bufSize + 6]; 
+    int frameIndex = 0;
 
-    return 0;
+    frame[frameIndex++] = FLAG;
+    frame[frameIndex++] = addressField;
+    frame[frameIndex++] = controlField;
+
+    for (int i = 0; i < bufSize; i++) {
+        if (buf[i] == FLAG) {
+            frame[frameIndex++] = 0x7D;  
+            frame[frameIndex++] = buf[i] ^ 0x20;  
+        }
+        else {
+            frame[frameIndex++] = buf[i];
+        }
+    }
+
+    unsigned char checksum = 0;
+    for (int i = 0; i < bufSize; i++) {
+        checksum ^= buf[i];
+    }
+    frame[frameIndex++] = checksum;
+    frame[frameIndex++] = FLAG;
+
+    int result = writeBytesSerialPort(frame, frameIndex);
+    if (result != frameIndex) {
+        printf("Error writing to serial port!\n");
+        return -1;
+    }
+    return frameIndex;
 }
 
 ////////////////////////////////////////////////

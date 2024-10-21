@@ -149,19 +149,20 @@ int llopen(LinkLayer connectionParameters){
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    unsigned char FLAG = 0x7E;
+    unsigned char flag = 0x7E;
+    unsigned char escape = 0x7D;
     unsigned char controlField = 0x03;  
     unsigned char addressField = 0x01;  
-    unsigned char frame[bufSize + 6]; 
+    unsigned char frame[2 * bufSize + 6];
     int frameIndex = 0;
 
-    frame[frameIndex++] = FLAG;
+    frame[frameIndex++] = flag;
     frame[frameIndex++] = addressField;
     frame[frameIndex++] = controlField;
 
     for (int i = 0; i < bufSize; i++) {
-        if (buf[i] == FLAG) {
-            frame[frameIndex++] = 0x7D;  
+        if (buf[i] == flag || buf[i] == escape) {
+            frame[frameIndex++] = escape;
             frame[frameIndex++] = buf[i] ^ 0x20;  
         }
         else {
@@ -174,13 +175,15 @@ int llwrite(const unsigned char *buf, int bufSize)
         checksum ^= buf[i];
     }
     frame[frameIndex++] = checksum;
-    frame[frameIndex++] = FLAG;
+    frame[frameIndex++] = flag;
 
     int result = writeBytesSerialPort(frame, frameIndex);
     if (result != frameIndex) {
         printf("Error writing to serial port!\n");
         return -1;
     }
+    printf("Frame sent successfully.\n");
+
     return frameIndex;
 }
 

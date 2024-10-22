@@ -3,8 +3,11 @@
 #include <stdlib.h>
 #include "application_layer.h"
 #include "link_layer.h"
+#include "serial_port.h"
 #include "string.h"
 #include <stdio.h>
+
+#define max_packet_size 255
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
@@ -12,67 +15,62 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     LinkLayer ll;
     strncpy(ll.serialPort, serialPort, sizeof(ll.serialPort) - 1);
     ll.serialPort[sizeof(ll.serialPort) - 1] = '\0';
-    if (strcmp(role, "tx") == 0){
-      ll.role = LlTx;
-    }
-    else {
-        ll.role = LlRx;
-    }
+
     ll.baudRate = baudRate;
     ll.nRetransmissions = nTries;
     ll.timeout = timeout;
 
-    if (llopen(ll) == -1) {
-            printf("Error opening link layer!\n");
-            return;
-        }
+    int fd = openSerialPort(serialPort, baudRate);
+    if (fd < 0) {
+        printf("Failed to open serial port.\n");
+        return;
+    }
 
-    if (ll.role == LlTx) {
+    if (strcmp(role, "tx") == 0) {
+        ll.role = LlTx;
+
         FILE *file = fopen(filename, "rb");
-        if (file == NULL) {
-            printf("Error opening file %s!\n", filename);
+        if (!file) {
+            printf("Failed to open file %s for reading.\n", filename);
+            closeSerialPort();
             return;
         }
 
-        fseek(file, 0, SEEK_END);
-        int fileSize = ftell(file);
-        fseek(file, 0, SEEK_SET);
-
-        unsigned char *buf = (unsigned char *)malloc(fileSize);
-        if (buf == NULL) {
-            printf("Error allocating memory!\n");
-            fclose(file);
-            return;
+        unsigned char buffer[max_packet_size];
+        int bytesRead;
+        while ((bytesRead = fread(buffer, 1, max_packet_size, file)) > 0) {
+            int result = llwrite(buffer, bytesRead);
+            if (result != 0) {
+                printf("Failed to send data using llwrite. Exiting.\n");
+                break;
+            }
         }
-
-        size_t bytesRead = fread(buf, 1, fileSize, file);
-        if (bytesRead != fileSize) {
-            printf("Error reading file %s!\n", filename);
-            free(buf);
-            fclose(file);
-            return;
-        }
-
-        if (llwrite(buf, fileSize) == -1) {
-            printf("Error writing data to link layer!\n");
-        }
-
-        free(buf);
         fclose(file);
     }
-    else if (ll.role == LlRx) {
-        unsigned char buf[1024];
-        int receivedSize = llread(buf);
+    else if (strcmp(role, "rx") == 0) {
+        ll.role = LlRx;
 
         FILE *file = fopen(filename, "wb");
-        if (file == NULL) {
-            printf("Error opening file for writing: %s!\n", filename);
+        if (!file) {
+            printf("Failed to open file %s for writing.\n", filename);
+            closeSerialPort();
             return;
         }
 
-        fwrite(buf, 1, receivedSize, file);
+        unsigned char packet[max_packet_size];
+        int bytesRead;
+        while (1) {
+            bytesRead = llread(packet);
+            if (bytesRead > 0) {
+                fwrite(packet, 1, bytesRead, file);
+                unsigned char ack = 0x05;
+                writeBytesSerialPort(&ack, 1);
+            } else {
+                unsigned char nack = 0x15;
+                writeBytesSerialPort(&nack, 1);
+            }
+        }
         fclose(file);
     }
-
-    llclose(1);
+    closeSerialPort();
 }

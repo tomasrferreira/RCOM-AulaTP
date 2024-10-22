@@ -5,6 +5,9 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <signal.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -144,47 +147,46 @@ int llopen(LinkLayer connectionParameters){
     return -1;
 }
 
+
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
-int llwrite(const unsigned char *buf, int bufSize)
-{
-    unsigned char flag = 0x7E;
-    unsigned char escape = 0x7D;
-    unsigned char controlField = 0x03;  
-    unsigned char addressField = 0x01;  
-    unsigned char frame[2 * bufSize + 6];
-    int frameIndex = 0;
+int llwrite(const unsigned char *buf, int bufSize) {
+    const unsigned char flag = 0x7E;
+    const unsigned char ack = 0x05;
+    const int max_retries = 3;
 
-    frame[frameIndex++] = flag;
-    frame[frameIndex++] = addressField;
-    frame[frameIndex++] = controlField;
+    unsigned char frame[1024];
+    int frame_length = 0;
+    int retries = 0;
+    int ack_received = 0;
 
-    for (int i = 0; i < bufSize; i++) {
-        if (buf[i] == flag || buf[i] == escape) {
-            frame[frameIndex++] = escape;
-            frame[frameIndex++] = buf[i] ^ 0x20;  
+    frame[frame_length++] = flag;
+    frame[frame_length++] = 0x03;
+    frame[frame_length++] = 0x00;
+    frame[frame_length++] = 'T';
+
+    unsigned char checksum = 0x03 ^ 0x00 ^ 'T';
+    frame[frame_length++] = checksum;
+    frame[frame_length++] = flag;
+
+    while (retries < max_retries && !ack_received) {
+        int bytes_written = writeBytesSerialPort(frame, frame_length);
+        if (bytes_written < 0) {
+            return -1;
         }
-        else {
-            frame[frameIndex++] = buf[i];
+
+        unsigned char response;
+        int res = readByteSerialPort(&response);
+        if (res == 1 && response == ack) {
+            ack_received = 1;
+        } else {
+            retries++;
         }
     }
 
-    unsigned char checksum = 0;
-    for (int i = 0; i < bufSize; i++) {
-        checksum ^= buf[i];
-    }
-    frame[frameIndex++] = checksum;
-    frame[frameIndex++] = flag;
-
-    int result = writeBytesSerialPort(frame, frameIndex);
-    if (result != frameIndex) {
-        printf("Error writing to serial port!\n");
-        return -1;
-    }
-    printf("Frame sent successfully.\n");
-
-    return frameIndex;
+    // Return success or failure after attempts
+    return ack_received ? 0 : -1;
 }
 
 ////////////////////////////////////////////////
@@ -192,10 +194,9 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
-    // TODO
 
-    return 0;
 }
+
 
 ////////////////////////////////////////////////
 // LLCLOSE

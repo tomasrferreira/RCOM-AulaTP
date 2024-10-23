@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #define max_packet_size 255
+#define END_OF_TRANSMISSION 0x04  // Special control character indicating end of transmission
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
@@ -39,15 +40,20 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         unsigned char buffer[max_packet_size];
         int bytesRead;
         while ((bytesRead = fread(buffer, 1, max_packet_size, file)) > 0) {
+            printf("Read %d bytes from file. Sending using llwrite...\n", bytesRead);
             int result = llwrite(buffer, bytesRead);
             if (result != 0) {
                 printf("Failed to send data using llwrite. Exiting.\n");
                 break;
             }
         }
+
+        // Signal end of transmission to the receiver
+        unsigned char end_signal[] = {END_OF_TRANSMISSION};
+        llwrite(end_signal, 1);
+
         fclose(file);
-    }
-    else if (strcmp(role, "rx") == 0) {
+    } else if (strcmp(role, "rx") == 0) {
         ll.role = LlRx;
 
         FILE *file = fopen(filename, "wb");
@@ -60,17 +66,33 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         unsigned char packet[max_packet_size];
         int bytesRead;
         while (1) {
+            printf("Waiting for data...\n");
             bytesRead = llread(packet);
             if (bytesRead > 0) {
+                // Check if it's the end of transmission signal
+                if (bytesRead == 1 && packet[0] == END_OF_TRANSMISSION) {
+                    printf("End of transmission received. Exiting.\n");
+                    break;
+                }
+
+                printf("Received %d bytes, writing to file.\n", bytesRead);
                 fwrite(packet, 1, bytesRead, file);
+
+                // Send ACK after successfully reading a frame
                 unsigned char ack = 0x05;
                 writeBytesSerialPort(&ack, 1);
-            } else {
+            } else if (bytesRead == -2) {
+                printf("Checksum mismatch. Sending NACK...\n");
                 unsigned char nack = 0x15;
                 writeBytesSerialPort(&nack, 1);
+            } else {
+                printf("Failed to read data. Exiting.\n");
+                break;
             }
         }
         fclose(file);
     }
+
+    // Close the serial port after operations are complete
     closeSerialPort();
 }

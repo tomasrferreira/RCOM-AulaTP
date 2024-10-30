@@ -20,13 +20,11 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     ll.baudRate = baudRate;
     ll.nRetransmissions = nTries;
     ll.timeout = timeout;
-
-    int fd = openSerialPort(serialPort, baudRate);
-    if (fd < 0) {
-        printf("Failed to open serial port.\n");
-        return;
+    if (strcmp(role, "tx") == 0) {
+        ll.role = LlTx;
     }
-
+    else {ll.role = LlRx;}
+    if (llopen(ll) == -1) return;
     if (strcmp(role, "tx") == 0) {
         ll.role = LlTx;
 
@@ -94,5 +92,5 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     }
 
     // Close the serial port after operations are complete
-    closeSerialPort();
+    if (llclose(1) == -1) return;
 }

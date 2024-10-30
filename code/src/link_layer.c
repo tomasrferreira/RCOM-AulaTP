@@ -20,24 +20,25 @@
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 volatile int stop = FALSE;
+LinkLayer connectionParams;
 
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
     alarmCount++;
-
-    printf("Alarm #%d\n", alarmCount);
 }
 
-int llopen(LinkLayer connectionParameters){
-    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
-    if (fd < 0){
+int llopen(LinkLayer connectionParameters) {
+    // Copy the connection parameters to the global variable
+    connectionParams = connectionParameters;
+
+    int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+    if (fd < 0) {
         return -1;
     }
 
-    int alarmCount = 0;
     int retransmissions = connectionParameters.nRetransmissions;
-    volatile int stop = FALSE;
+    unsigned char SET[5] = {0x7E,0x03,0x03,0x0,0x7E};
     int state = 0;
     unsigned char buf = 0;
 
@@ -46,14 +47,12 @@ int llopen(LinkLayer connectionParameters){
 
         while (alarmCount < retransmissions){
             if (alarmEnabled == FALSE){
-                unsigned char SET[5] = {0x7E,0x03,0x03,0x0,0x7E};
                 printf("SET sent.\n");
                 writeBytesSerialPort(SET, 5);
-                alarm(connectionParameters.timeout);
                 alarmEnabled = TRUE;
+                alarm(connectionParameters.timeout);
             }
             while (alarmEnabled == TRUE) {
-                if (alarmEnabled == TRUE) {break;}
                 readByteSerialPort(&buf);
                 if (buf > 0){
                     switch (buf){
@@ -67,19 +66,9 @@ int llopen(LinkLayer connectionParameters){
                                 state = 1;
                                 continue;
                             }
-
                         case 0x03:
                             if (state == 1) {
                                 state = 2;
-                                continue;
-                            }
-                            else {
-                                state = 0;
-                                continue;
-                            }
-                        case 0x04:
-                            if (state == 3){
-                                state = 4;
                                 continue;
                             }
                             else {
@@ -95,6 +84,15 @@ int llopen(LinkLayer connectionParameters){
                                 state = 0;
                                 continue;
                             }
+                        case 0x04:
+                            if (state == 3){
+                                state = 4;
+                                continue;
+                            }
+                            else {
+                                state = 0;
+                                continue;
+                            }
                         default:
                             state = 0;
                             continue;
@@ -103,22 +101,21 @@ int llopen(LinkLayer connectionParameters){
             }
         }
         alarm(0);
-        return -1;
     }
     else if (connectionParameters.role == LlRx){
         state = 0;
-        unsigned char UA[5] = {0x7E,0x03,0x07,0x04,0x7E};
-        stop = FALSE;
-        while (stop == FALSE){
+        unsigned char UA[5] = {0x7E, 0x03, 0x07, 0x04, 0x7E};
+        while (1) {
             int bytes = readByteSerialPort(&buf);
-            if (bytes > 0){
-                switch (buf){
+            if (bytes > 0) {
+                switch (buf) {
                     case 0x7E:
                         if (state == 4) {
-                          printf("SET received.\n");
-                          printf("UA Sent : 0x%x%x%x%x%x\n",UA[0],UA[1],UA[2],UA[3],UA[4]);
-                          writeBytesSerialPort(UA, 5);
-                          continue;
+                            printf("SET received.\n");
+                            printf("UA Sent : 0x%x%x%x%x%x\n", UA[0], UA[1], UA[2], UA[3], UA[4]);
+                            writeBytesSerialPort(UA, 5);
+                            alarm(0);
+                            return fd;
                         }
                         state = 1;
                         continue;
@@ -130,20 +127,20 @@ int llopen(LinkLayer connectionParameters){
                         state = 0;
                         continue;
                     case 0x0:
-                        if (state == 3){
+                        if (state == 3) {
                             state = 4;
                             continue;
                         }
                         state = 0;
                         continue;
                     default:
-                      state = 0;
-                      continue;
+                        state = 0;
+                        continue;
                 }
             }
         }
-        return 0;
     }
+    alarm(0);
     return -1;
 }
 
@@ -325,10 +322,152 @@ int llread(unsigned char *packet) {
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-    // TODO
+int llclose(int showStatistics) {
+    unsigned char buf = 0;
+    int state = 0;
 
-    int clstat = closeSerialPort();
-    return clstat;
+    unsigned char DISC_TX[5] = {0x7E, 0x03, 0x0B, 0x08, 0x7E}; // DISC frame from transmitter
+    unsigned char DISC_RX[5] = {0x7E, 0x01, 0x0B, 0x0A, 0x7E}; // DISC frame from receiver
+    unsigned char UA[5] = {0x7E, 0x03, 0x07, 0x04, 0x7E}; // UA frame to finalize disconnection
+
+    if (connectionParams.role == LlTx) { // Transmitter side
+        printf("Transmitter initiating disconnection...\n");
+        (void)signal(SIGALRM, alarmHandler);
+        alarmCount = 0;
+        alarmEnabled = FALSE;
+
+        while (alarmCount < connectionParams.nRetransmissions) {
+            if (alarmEnabled == FALSE) {
+                printf("Transmitter: Sending DISC frame.\n");
+                writeBytesSerialPort(DISC_TX, 5); // Send DISC frame to Receiver
+                alarmEnabled = TRUE;
+                alarm(connectionParams.timeout); // Start alarm for timeout
+            }
+
+            // Wait for DISC response from Receiver
+            while (alarmEnabled) {
+                int bytesRead = readByteSerialPort(&buf);
+                if (bytesRead > 0) {
+                    switch (buf) {
+                        case 0x7E:
+                            if (state == 4) {
+                                printf("Transmitter: DISC received from Receiver.\n");
+                                // Send UA to finalize disconnection
+                                printf("Transmitter: Sending UA frame.\n");
+                                writeBytesSerialPort(UA, 5);
+                                alarm(0); // Stop the alarm
+                                closeSerialPort();
+                                return 0;
+                            }
+                            state = 1; // Start of frame detected
+                            break;
+
+                        case 0x01:
+                            if (state == 1) state = 2; // Expecting A = 0x01 (Receiver's DISC)
+                            else state = 0; // Reset if unexpected
+                            break;
+
+                        case 0x0B:
+                            if (state == 2) state = 3; // C = 0x0B (DISC control byte)
+                            else state = 0; // Reset if unexpected
+                            break;
+
+                        case 0x0A:
+                            if (state == 3) state = 4; // BCC check for DISC
+                            else state = 0; // Reset if unexpected
+                            break;
+
+                        default:
+                            state = 0;
+                            break;
+                    }
+                }
+            }
+        }
+        alarm(0);
+        printf("Transmitter: Failed to close connection after %d retransmissions.\n", alarmCount);
+        return -1;
+
+    } else if (connectionParams.role == LlRx) {
+        printf("Receiver awaiting DISC from Transmitter...\n");
+
+        while (1) {
+
+            int bytesRead = readByteSerialPort(&buf);
+            if (bytesRead > 0) {
+                switch (buf) {
+                    case 0x7E:
+                        if (state == 4) {
+                            // End flag of the DISC frame received from Transmitter
+                            printf("Receiver: DISC received from Transmitter.\n");
+                            printf("Receiver: Sending DISC frame.\n");
+                            writeBytesSerialPort(DISC_RX, 5);
+
+                            state = 0;
+                            int uaState = 0;
+                            while (1) {
+                                int uaBytes = readByteSerialPort(&buf);
+                                if (uaBytes > 0) {
+                                    switch (buf) {
+                                        case 0x7E:
+                                            if (uaState == 4) { // End flag of UA frame
+                                                printf("Receiver: UA received from Transmitter. Closing connection.\n");
+                                                closeSerialPort();
+                                                return 0;
+                                            }
+                                            uaState = 1;
+                                            break;
+
+                                        case 0x03:
+                                            if (uaState == 1) uaState = 2; // A = 0x03
+                                            else uaState = 0;
+                                            break;
+
+                                        case 0x07:
+                                            if (uaState == 2) uaState = 3; // C = 0x07 (UA control byte)
+                                            else uaState = 0;
+                                            break;
+
+                                        case 0x04:
+                                            if (uaState == 3) uaState = 4; // BCC check for UA
+                                            else uaState = 0;
+                                            break;
+
+                                        default:
+                                            uaState = 0;
+                                            break;
+                                    }
+                                }
+                            }
+                        }
+                        state = 1;
+                        break;
+
+                    case 0x03:
+                        if (state == 1) state = 2; // A = 0x03 from Transmitter DISC
+                        else state = 0;
+                        break;
+
+                    case 0x0B:
+                        if (state == 2) state = 3; // C = 0x0B (DISC control byte)
+                        else state = 0;
+                        break;
+
+                    case (0x03 ^ 0x0B):
+                        if (state == 3) state = 4; // BCC check
+                        else state = 0;
+                        break;
+
+                    default:
+                        state = 0;
+                        break;
+                }
+            }
+        }
+    }
+
+    return -1; // Return -1 if disconnection fails for either role
 }
+
+
+

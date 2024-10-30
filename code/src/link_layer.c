@@ -5,9 +5,6 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <signal.h>
-#include <string.h>
-#include <errno.h>
-#include <fcntl.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -16,7 +13,6 @@
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
-
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 volatile int stop = FALSE;
@@ -152,23 +148,27 @@ int llwrite(const unsigned char *buf, int bufSize) {
     const unsigned char flag = 0x7E;
     const unsigned char ack = 0x05;
     const unsigned char nack = 0x15;
-    const int max_retries = 3;
+    const int max_retries = connectionParams.nRetransmissions;
 
-    unsigned char frame[2048]; // Larger buffer for potential stuffed bytes
+    unsigned char frame[2 * bufSize + 10];
     int frame_length = 0;
     int retries = 0;
     int ack_received = 0;
 
     // Prepare the frame
-    frame[frame_length++] = flag; // Start flag
-    frame[frame_length++] = 0x03; // Address
-    frame[frame_length++] = 0x00; // Control
+    frame[frame_length++] = flag;           // Start flag
+    frame[frame_length++] = 0x03;           // Address
+    frame[frame_length++] = 0x00;           // Control
 
-    // Calculate checksum over data
-    unsigned char checksum = 0x03 ^ 0x00;
+    // BCC1
+    unsigned char BCC1 = frame[1] ^ frame[2];
+    frame[frame_length++] = BCC1;           // Add BCC1
+
+
+    // Calculate BCC2 (checksum) over data with byte-stuffing
+    unsigned char BCC2 = 0;
     for (int i = 0; i < bufSize; i++) {
-        checksum ^= buf[i];
-        // Byte-stuffing: escape `0x7E` and `0x7D` in data
+        BCC2 ^= buf[i];
         if (buf[i] == flag || buf[i] == 0x7D) {
             frame[frame_length++] = 0x7D;
             frame[frame_length++] = buf[i] ^ 0x20;
@@ -177,15 +177,15 @@ int llwrite(const unsigned char *buf, int bufSize) {
         }
     }
 
-    // Add checksum with potential byte-stuffing
-    if (checksum == flag || checksum == 0x7D) {
+    // Add BCC2 with byte-stuffing if necessary
+    if (BCC2 == flag || BCC2 == 0x7D) {
         frame[frame_length++] = 0x7D;
-        frame[frame_length++] = checksum ^ 0x20;
+        frame[frame_length++] = BCC2 ^ 0x20;
     } else {
-        frame[frame_length++] = checksum;
+        frame[frame_length++] = BCC2;
     }
 
-    frame[frame_length++] = flag; // End flag
+    frame[frame_length++] = flag;        // End flag
 
     // Retry sending until ACK or max retries
     while (retries < max_retries && !ack_received) {
@@ -199,30 +199,24 @@ int llwrite(const unsigned char *buf, int bufSize) {
         printf("Frame sent, waiting for ACK or NACK...\n");
 
         unsigned char response;
-        int res = readByteSerialPort(&response);
-        if (res == 1) {
-            printf("Received response: 0x%02X\n", response);
+        if (readByteSerialPort(&response) == 1) {
             if (response == ack) {
-                ack_received = 1;
                 printf("ACK received for frame.\n");
+                ack_received = 1;
             } else if (response == nack) {
                 printf("NACK received, retrying...\n");
                 retries++;
             } else {
-                printf("Unexpected response: 0x%02X. Retrying...\n", response);
+                printf("Unexpected response. Retrying...\n");
                 retries++;
             }
         } else {
-            printf("No response detected; attempting retransmission...\n");
+            printf("No response detected; retrying...\n");
             retries++;
         }
     }
 
-    if (!ack_received) {
-        printf("Failed to receive ACK after %d retries.\n", max_retries);
-    }
-
-    return ack_received ? 0 : -1;
+    return ack_received ? 0 : -1;        // Return 0 if ACK received, -1 otherwise
 }
 
 
@@ -232,11 +226,9 @@ int llwrite(const unsigned char *buf, int bufSize) {
 int llread(unsigned char *packet) {
     const unsigned char flag = 0x7E;
     unsigned char byte;
-    unsigned char frame[2048]; // Buffer to accommodate unstuffed data
+    unsigned char frame[2048];        // Frame buffer
     int frame_length = 0;
     int data_length = 0;
-    unsigned char calculated_checksum = 0;
-    unsigned char received_checksum = 0;
     int start_flag_detected = 0;
     int escape_next = 0;
 
@@ -248,7 +240,7 @@ int llread(unsigned char *packet) {
             if (!start_flag_detected) {
                 start_flag_detected = 1;
                 frame_length = 0;
-                printf("Start flag detected. Reading frame...\n");
+                printf("Start flag detected.\n");
                 continue;
             } else {
                 printf("End flag detected. Frame read complete.\n");
@@ -257,7 +249,7 @@ int llread(unsigned char *packet) {
         }
 
         if (start_flag_detected) {
-            if (byte == 0x7D) {
+            if (byte == 0x7D) {        // Byte-stuffing detected
                 escape_next = 1;
             } else {
                 if (escape_next) {
@@ -268,46 +260,49 @@ int llread(unsigned char *packet) {
                 }
                 if (frame_length >= sizeof(frame)) {
                     printf("Frame too long, discarding.\n");
-                    return -1; // Frame too long, discard it
+                    return -1;
                 }
             }
         }
     }
 
     // Validate frame length before processing
-    if (frame_length < 3) {
+    if (frame_length < 5) {
         printf("Invalid frame length: %d\n", frame_length);
         return -1;
     }
 
-    // Extract address, control, and data bytes
     unsigned char address = frame[0];
     unsigned char control = frame[1];
-    data_length = frame_length - 3; // Exclude address, control, and checksum
+    unsigned char BCC1 = address ^ control;
 
-    printf("Frame received with length: %d\n", frame_length);
-    printf("Data bytes: ");
-    for (int i = 0; i < data_length; i++) {
-        packet[i] = frame[i + 2];
-        printf("0x%02X ", packet[i]);
-    }
-    printf("\n");
 
-    // Calculate checksum including address and control
-    calculated_checksum = address ^ control;
-    for (int i = 0; i < data_length; i++) {
-        calculated_checksum ^= packet[i];
-    }
-    received_checksum = frame[frame_length - 1];
-
-    printf("Received checksum: 0x%02X, Calculated checksum: 0x%02X\n", received_checksum, calculated_checksum);
-
-    // Verify checksum
-    if (calculated_checksum != received_checksum) {
-        printf("Checksum mismatch. Sending NACK...\n");
+    // Check BCC1 for Address and Control field
+    if (BCC1 != frame[2]) {
+        printf("BCC1 mismatch. Sending NACK...\n");
         unsigned char nack = 0x15;
         writeBytesSerialPort(&nack, 1);
-        return -2; // Indicate checksum error
+        return -2;
+    }
+
+    // Extract and validate data bytes
+    data_length = frame_length - 4;     // Exclude Address, Control, BCC1, and final flag
+    for (int i = 0; i < data_length; i++) {
+        packet[i] = frame[i + 3];
+    }
+
+    // Validate BCC2 (checksum)
+    unsigned char BCC2 = frame[frame_length - 2];
+    unsigned char calculated_BCC2 = 0;
+    for (int i = 0; i < data_length; i++) {
+        calculated_BCC2 ^= packet[i];
+    }
+
+    if (BCC2 != calculated_BCC2) {
+        printf("BCC2 mismatch. Sending NACK...\n");
+        unsigned char nack = 0x15;
+        writeBytesSerialPort(&nack, 1);
+        return -2;
     }
 
     // Send ACK after successful frame reception

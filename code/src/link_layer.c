@@ -155,20 +155,17 @@ int llwrite(const unsigned char *buf, int bufSize) {
     int retries = 0;
     int ack_received = 0;
 
-    // Prepare the frame
-    frame[frame_length++] = flag;           // Start flag
-    frame[frame_length++] = 0x03;           // Address
-    frame[frame_length++] = 0x00;           // Control
-
-    // BCC1
+    frame[frame_length++] = flag;
+    frame[frame_length++] = 0x03;
+    frame[frame_length++] = 0x00;
     unsigned char BCC1 = frame[1] ^ frame[2];
-    frame[frame_length++] = BCC1;           // Add BCC1
+    frame[frame_length++] = BCC1;
 
-
-    // Calculate BCC2 (checksum) over data with byte-stuffing
     unsigned char BCC2 = 0;
+    printf("Calculating BCC2 for transmission:\n");
     for (int i = 0; i < bufSize; i++) {
         BCC2 ^= buf[i];
+        printf("  Byte %02x -> Cumulative BCC2: %02x\n", buf[i], BCC2);
         if (buf[i] == flag || buf[i] == 0x7D) {
             frame[frame_length++] = 0x7D;
             frame[frame_length++] = buf[i] ^ 0x20;
@@ -176,47 +173,43 @@ int llwrite(const unsigned char *buf, int bufSize) {
             frame[frame_length++] = buf[i];
         }
     }
-
-    // Add BCC2 with byte-stuffing if necessary
+    printf("Final BCC2: 0x%02x\n", BCC2);
     if (BCC2 == flag || BCC2 == 0x7D) {
         frame[frame_length++] = 0x7D;
         frame[frame_length++] = BCC2 ^ 0x20;
     } else {
         frame[frame_length++] = BCC2;
     }
+    frame[frame_length++] = flag;
 
-    frame[frame_length++] = flag;        // End flag
-
-    // Retry sending until ACK or max retries
     while (retries < max_retries && !ack_received) {
         printf("Attempt %d to send frame\n", retries + 1);
         int bytes_written = writeBytesSerialPort(frame, frame_length);
-        if (bytes_written < 0) {
-            printf("Failed to transmit frame via serial port.\n");
-            return -1;
-        }
-
-        printf("Frame sent, waiting for ACK or NACK...\n");
-
+        printf("Frame sent with %d bytes. Awaiting ACK/NACK.\n", bytes_written);
         unsigned char response;
-        if (readByteSerialPort(&response) == 1) {
-            if (response == ack) {
-                printf("ACK received for frame.\n");
-                ack_received = 1;
-            } else if (response == nack) {
-                printf("NACK received, retrying...\n");
-                retries++;
-            } else {
-                printf("Unexpected response. Retrying...\n");
-                retries++;
+        int attempts = 0;
+        while (attempts < 5) {
+            if (readByteSerialPort(&response) == 1) {
+                printf("Received response byte: 0x%02x\n", response);
+                if (response == ack) {
+                    printf("ACK received.\n");
+                    ack_received = 1;
+                    break;
+                } else if (response == nack) {
+                    printf("NACK received. Retrying...\n");
+                    retries++;
+                    break;
+                }
             }
-        } else {
-            printf("No response detected; retrying...\n");
+            usleep(1000);
+            attempts++;
+        }
+        if (!ack_received && attempts >= 5) {
+            printf("No response. Retrying...\n");
             retries++;
         }
     }
-
-    return ack_received ? 0 : -1;        // Return 0 if ACK received, -1 otherwise
+    return ack_received ? 0 : -1;
 }
 
 
@@ -226,47 +219,36 @@ int llwrite(const unsigned char *buf, int bufSize) {
 int llread(unsigned char *packet) {
     const unsigned char flag = 0x7E;
     unsigned char byte;
-    unsigned char frame[2048];        // Frame buffer
+    unsigned char frame[2048];
     int frame_length = 0;
-    int data_length = 0;
     int start_flag_detected = 0;
     int escape_next = 0;
+    int data_length = 0;
+    unsigned char calculated_BCC2 = 0;
 
     printf("Waiting for data...\n");
 
-    // Read bytes until a complete frame is detected
     while (readByteSerialPort(&byte) == 1) {
         if (byte == flag) {
             if (!start_flag_detected) {
                 start_flag_detected = 1;
                 frame_length = 0;
-                printf("Start flag detected.\n");
                 continue;
             } else {
-                printf("End flag detected. Frame read complete.\n");
                 break;
             }
         }
 
         if (start_flag_detected) {
-            if (byte == 0x7D) {        // Byte-stuffing detected
+            if (byte == 0x7D) {
                 escape_next = 1;
             } else {
-                if (escape_next) {
-                    frame[frame_length++] = byte ^ 0x20;
-                    escape_next = 0;
-                } else {
-                    frame[frame_length++] = byte;
-                }
-                if (frame_length >= sizeof(frame)) {
-                    printf("Frame too long, discarding.\n");
-                    return -1;
-                }
+                frame[frame_length++] = escape_next ? (byte ^ 0x20) : byte;
+                escape_next = 0;
             }
         }
     }
 
-    // Validate frame length before processing
     if (frame_length < 5) {
         printf("Invalid frame length: %d\n", frame_length);
         return -1;
@@ -276,8 +258,6 @@ int llread(unsigned char *packet) {
     unsigned char control = frame[1];
     unsigned char BCC1 = address ^ control;
 
-
-    // Check BCC1 for Address and Control field
     if (BCC1 != frame[2]) {
         printf("BCC1 mismatch. Sending NACK...\n");
         unsigned char nack = 0x15;
@@ -285,27 +265,23 @@ int llread(unsigned char *packet) {
         return -2;
     }
 
-    // Extract and validate data bytes
-    data_length = frame_length - 4;     // Exclude Address, Control, BCC1, and final flag
+    data_length = frame_length - 4;
     for (int i = 0; i < data_length; i++) {
         packet[i] = frame[i + 3];
-    }
-
-    // Validate BCC2 (checksum)
-    unsigned char BCC2 = frame[frame_length - 2];
-    unsigned char calculated_BCC2 = 0;
-    for (int i = 0; i < data_length; i++) {
         calculated_BCC2 ^= packet[i];
+        printf("Byte received: %02x, Cumulative BCC2: %02x\n", packet[i], calculated_BCC2);
     }
 
-    if (BCC2 != calculated_BCC2) {
+    unsigned char received_BCC2 = frame[frame_length - 2];
+    printf("Received BCC2: 0x%02x, Calculated BCC2: 0x%02x\n", received_BCC2, calculated_BCC2);
+
+    if (calculated_BCC2 != received_BCC2) {
         printf("BCC2 mismatch. Sending NACK...\n");
         unsigned char nack = 0x15;
         writeBytesSerialPort(&nack, 1);
         return -2;
     }
 
-    // Send ACK after successful frame reception
     unsigned char ack = 0x05;
     writeBytesSerialPort(&ack, 1);
     printf("Frame received and verified successfully.\n");

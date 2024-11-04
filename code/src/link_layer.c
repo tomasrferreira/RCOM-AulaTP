@@ -28,17 +28,17 @@ int llopen(LinkLayer connectionParameters) {
     // Copy the connection parameters to the global variable
     connectionParams = connectionParameters;
 
-    int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+    int fd = openSerialPort(connectionParams.serialPort, connectionParams.baudRate);
     if (fd < 0) {
         return -1;
     }
 
-    int retransmissions = connectionParameters.nRetransmissions;
+    int retransmissions = connectionParams.nRetransmissions;
     unsigned char SET[5] = {0x7E,0x03,0x03,0x0,0x7E};
     int state = 0;
     unsigned char buf = 0;
 
-    if (connectionParameters.role == LlTx){
+    if (connectionParams.role == LlTx){
         (void)signal(SIGALRM, alarmHandler);
 
         while (alarmCount < retransmissions){
@@ -46,7 +46,7 @@ int llopen(LinkLayer connectionParameters) {
                 printf("SET sent.\n");
                 writeBytesSerialPort(SET, 5);
                 alarmEnabled = TRUE;
-                alarm(connectionParameters.timeout);
+                alarm(connectionParams.timeout);
             }
             while (alarmEnabled == TRUE) {
                 readByteSerialPort(&buf);
@@ -98,7 +98,7 @@ int llopen(LinkLayer connectionParameters) {
         }
         alarm(0);
     }
-    else if (connectionParameters.role == LlRx){
+    else if (connectionParams.role == LlRx){
         state = 0;
         unsigned char UA[5] = {0x7E, 0x03, 0x07, 0x04, 0x7E};
         while (1) {
